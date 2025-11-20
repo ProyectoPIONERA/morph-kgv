@@ -1,0 +1,81 @@
+🔍 Predicados y TriplesMap asociados
+===================================
+
+ ✔ TriplesMap: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#AssistantProfessor
+    ↳ Predicate: http://www.w3.org/1999/02/22-rdf-syntax-ns#type
+
+ ✔ TriplesMap: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#AssociateProfessor
+    ↳ Predicate: http://www.w3.org/1999/02/22-rdf-syntax-ns#type
+
+ ✔ TriplesMap: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#CoAuthorOfPublication
+    ↳ Predicate: http://swat.cse.lehigh.edu/onto/univ-bench.owl#publicationAuthor
+
+ ✔ TriplesMap: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#Department
+    ↳ Predicate: http://www.w3.org/1999/02/22-rdf-syntax-ns#type
+
+ ✔ TriplesMap: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#Department
+    ↳ Predicate: http://swat.cse.lehigh.edu/onto/univ-bench.owl#name
+
+ ✔ TriplesMap: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#Department
+    ↳ Predicate: http://swat.cse.lehigh.edu/onto/univ-bench.owl#subOrganizationOf
+
+
+🔍 Subject Templates detectadas
+================================
+
+ ✔ file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#AssistantProfessor → http://www.department{departmentnr}.university{universitynr}.edu/{facultyname}
+ ✔ file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#AssociateProfessor → http://www.department{departmentnr}.university{universitynr}.edu/{facultyname}
+ ✔ file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#CoAuthorOfPublication → http://www.department{departmentnr}.university{universitynr}.edu/{facultyname}/{publicationname}
+ ✔ file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#Department → http://www.department{departmentnr}.university{universitynr}.edu
+
+
+🔎 Matching automático entre Subject Templates
+==============================================
+
+➡ URI generada: `http://www.department1.university1.edu/1` (desde: http://www.department{departmentnr}.university{universitynr}.edu/{facultyname})
+   ✓ MATCH → http://www.department{departmentnr}.university{universitynr}.edu/{facultyname} (TM: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#AssistantProfessor)
+   ✓ MATCH → http://www.department{departmentnr}.university{universitynr}.edu/{facultyname} (TM: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#AssociateProfessor)
+   ✗ NO MATCH → http://www.department{departmentnr}.university{universitynr}.edu/{facultyname}/{publicationname} (TM: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#CoAuthorOfPublication)
+   ✗ NO MATCH → http://www.department{departmentnr}.university{universitynr}.edu (TM: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#Department)
+
+➡ URI generada: `http://www.department1.university1.edu/1` (desde: http://www.department{departmentnr}.university{universitynr}.edu/{facultyname})
+   ✓ MATCH → http://www.department{departmentnr}.university{universitynr}.edu/{facultyname} (TM: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#AssistantProfessor)
+   ✓ MATCH → http://www.department{departmentnr}.university{universitynr}.edu/{facultyname} (TM: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#AssociateProfessor)
+   ✗ NO MATCH → http://www.department{departmentnr}.university{universitynr}.edu/{facultyname}/{publicationname} (TM: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#CoAuthorOfPublication)
+   ✗ NO MATCH → http://www.department{departmentnr}.university{universitynr}.edu (TM: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#Department)
+
+➡ URI generada: `http://www.department1.university1.edu/1/1` (desde: http://www.department{departmentnr}.university{universitynr}.edu/{facultyname}/{publicationname})
+   ✓ MATCH → http://www.department{departmentnr}.university{universitynr}.edu/{facultyname} (TM: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#AssistantProfessor)
+   ✓ MATCH → http://www.department{departmentnr}.university{universitynr}.edu/{facultyname} (TM: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#AssociateProfessor)
+   ✓ MATCH → http://www.department{departmentnr}.university{universitynr}.edu/{facultyname}/{publicationname} (TM: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#CoAuthorOfPublication)
+   ✗ NO MATCH → http://www.department{departmentnr}.university{universitynr}.edu (TM: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#Department)
+
+➡ URI generada: `http://www.department1.university1.edu` (desde: http://www.department{departmentnr}.university{universitynr}.edu)
+   ✗ NO MATCH → http://www.department{departmentnr}.university{universitynr}.edu/{facultyname} (TM: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#AssistantProfessor)
+   ✗ NO MATCH → http://www.department{departmentnr}.university{universitynr}.edu/{facultyname} (TM: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#AssociateProfessor)
+   ✗ NO MATCH → http://www.department{departmentnr}.university{universitynr}.edu/{facultyname}/{publicationname} (TM: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#CoAuthorOfPublication)
+   ✓ MATCH → http://www.department{departmentnr}.university{universitynr}.edu (TM: file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#Department)
+
+
+📌 Predicates y sus ObjectMaps asociados
+===========================================
+
+🔹 Predicate: http://www.w3.org/1999/02/22-rdf-syntax-ns#type
+   • http://swat.cse.lehigh.edu/onto/univ-bench.owl#AssistantProfessor   (http://w3id.org/rml/constant)
+   • http://swat.cse.lehigh.edu/onto/univ-bench.owl#AssociateProfessor   (http://w3id.org/rml/constant)
+   • http://swat.cse.lehigh.edu/onto/univ-bench.owl#Department   (http://w3id.org/rml/constant)
+
+----------------------------------------------------
+
+🔹 Predicate: http://swat.cse.lehigh.edu/onto/univ-bench.owl#publicationAuthor
+
+----------------------------------------------------
+
+🔹 Predicate: http://swat.cse.lehigh.edu/onto/univ-bench.owl#name
+
+----------------------------------------------------
+
+🔹 Predicate: http://swat.cse.lehigh.edu/onto/univ-bench.owl#subOrganizationOf
+
+----------------------------------------------------
+

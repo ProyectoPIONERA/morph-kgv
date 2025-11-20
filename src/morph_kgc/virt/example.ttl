@@ -1,0 +1,67 @@
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rml: <http://w3id.org/rml/> .
+@prefix ub: <http://swat.cse.lehigh.edu/onto/univ-bench.owl#> .
+
+<file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#AssistantProfessor> rml:logicalSource [ rml:query """
+        SELECT department.nr AS departmentnr, faculty.name AS facultyname, department.subOrganizationOf AS universitynr
+        FROM professor INNER JOIN faculty ON professor.nr=faculty.nr INNER JOIN department ON faculty.worksFor=department.nr WHERE professor.professorType='assistantProfessor' """ ;
+            rml:referenceFormulation rml:SQL2008 ] ;
+    rml:predicateObjectMap [ rml:graphMap [ rml:constant rml:defaultGraph ;
+                    rml:termType rml:IRI ] ;
+            rml:objectMap [ rml:constant ub:AssistantProfessor ;
+                    rml:termType rml:IRI ] ;
+            rml:predicateMap [ rml:constant rdf:type ;
+                    rml:termType rml:IRI ] ] ;
+    rml:subjectMap [ rml:template "http://www.department{departmentnr}.university{universitynr}.edu/{facultyname}" ;
+            rml:termType rml:IRI ] .
+
+<file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#AssociateProfessor> rml:logicalSource [ rml:query """
+        SELECT department.nr AS departmentnr, faculty.name AS facultyname, department.subOrganizationOf AS universitynr
+        FROM professor INNER JOIN faculty ON professor.nr=faculty.nr INNER JOIN department ON faculty.worksFor=department.nr WHERE professor.professorType='associateProfessor' """ ;
+            rml:referenceFormulation rml:SQL2008 ] ;
+    rml:predicateObjectMap [ rml:graphMap [ rml:constant rml:defaultGraph ;
+                    rml:termType rml:IRI ] ;
+            rml:objectMap [ rml:constant ub:AssociateProfessor ;
+                    rml:termType rml:IRI ] ;
+            rml:predicateMap [ rml:constant rdf:type ;
+                    rml:termType rml:IRI ] ] ;
+    rml:subjectMap [ rml:template "http://www.department{departmentnr}.university{universitynr}.edu/{facultyname}" ;
+            rml:termType rml:IRI ] .
+
+<file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#CoAuthorOfPublication> rml:logicalSource [ rml:query """
+        SELECT publication.name AS publicationname, graduateStudent.name AS graduatestudentname, faculty.name AS facultyname, department.nr AS departmentnr, department.subOrganizationOf AS universitynr
+        FROM coAuthorOfPublication INNER JOIN publication ON coAuthorOfPublication.publicationID=publication.nr INNER JOIN faculty ON publication.mainAuthor=faculty.nr INNER JOIN department ON faculty.worksFor=department.nr INNER JOIN graduateStudent ON coAuthorOfPublication.graduateStudentID=graduateStudent.nr """ ;
+            rml:referenceFormulation rml:SQL2008 ] ;
+    rml:predicateObjectMap [ rml:graphMap [ rml:constant rml:defaultGraph ;
+                    rml:termType rml:IRI ] ;
+            rml:objectMap [ rml:template "http://www.department{departmentnr}.university{universitynr}.edu/{graduatestudentname}" ;
+                    rml:termType rml:IRI ] ;
+            rml:predicateMap [ rml:constant ub:publicationAuthor ;
+                    rml:termType rml:IRI ] ] ;
+    rml:subjectMap [ rml:template "http://www.department{departmentnr}.university{universitynr}.edu/{facultyname}/{publicationname}" ;
+            rml:termType rml:IRI ] .
+
+<file:///home/jorge/proyectos/git/lubm4obda/mappings/rml/lubm4obda.rml.ttl#Department> rml:logicalSource [ rml:query """
+        SELECT nr AS departmentnr, subOrganizationOf AS universitynr, name
+        FROM department """ ;
+            rml:referenceFormulation rml:SQL2008 ] ;
+    rml:predicateObjectMap [ rml:graphMap [ rml:constant rml:defaultGraph ;
+                    rml:termType rml:IRI ] ;
+            rml:objectMap [ rml:constant ub:Department ;
+                    rml:termType rml:IRI ] ;
+            rml:predicateMap [ rml:constant rdf:type ;
+                    rml:termType rml:IRI ] ],
+        [ rml:graphMap [ rml:constant rml:defaultGraph ;
+                    rml:termType rml:IRI ] ;
+            rml:objectMap [ rml:reference "name" ;
+                    rml:termType rml:Literal ] ;
+            rml:predicateMap [ rml:constant ub:name ;
+                    rml:termType rml:IRI ] ],
+        [ rml:graphMap [ rml:constant rml:defaultGraph ;
+                    rml:termType rml:IRI ] ;
+            rml:objectMap [ rml:template "http://www.university{universitynr}.edu" ;
+                    rml:termType rml:IRI ] ;
+            rml:predicateMap [ rml:constant ub:subOrganizationOf ;
+                    rml:termType rml:IRI ] ] ;
+    rml:subjectMap [ rml:template "http://www.department{departmentnr}.university{universitynr}.edu" ;
+            rml:termType rml:IRI ] .
