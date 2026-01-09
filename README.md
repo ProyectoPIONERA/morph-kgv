@@ -77,7 +77,7 @@ config = """
 g_rdflib = morph_kgc.materialize(config)
 ```
 
-## License :unlock:
+## License
 
 Morph-KGC is available under the **[Apache License 2.0](https://github.com/morph-kgc/morph-kgc/blob/main/LICENSE)**.
 
