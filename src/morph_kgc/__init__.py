@@ -22,6 +22,7 @@ from .materializer import _materialize_mapping_group_to_set
 from .args_parser import load_config_from_argument
 from .constants import RML_TRIPLES_MAP_CLASS, LOGGING_NAMESPACE
 from .mapping.yarrrml import load_yarrrml
+from .sparql.virt_store import VIRTStore
 from pathlib import Path
 
 
@@ -43,7 +44,6 @@ def materialize_set(config, python_source=None):
 
     # keep only asserted mapping rules
     asserted_mapping_df = rml_df.loc[rml_df['triples_map_type'] == RML_TRIPLES_MAP_CLASS]
-    mapping_groups = [group for _, group in asserted_mapping_df.groupby(by='mapping_partition')]
 
     if config.is_multiprocessing_enabled():
         LOGGER.debug(f'Parallelizing with {config.get_number_of_processes()} cores.')

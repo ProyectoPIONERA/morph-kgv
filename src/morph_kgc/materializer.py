@@ -262,46 +262,6 @@ def _materialize_rml_rule(rml_rule, rml_df, fnml_df, config, data=None, parent_j
         data = pd.DataFrame({'placeholder': ['placeholder']})
         data = _materialize_rml_rule_terms(data, rml_rule, fnml_df, config)
 
-    elif rml_rule['subject_map_type'] == RML_QUOTED_TRIPLES_MAP or rml_rule['object_map_type'] == RML_QUOTED_TRIPLES_MAP:
-        if data is None:
-            data = _get_data(config, rml_rule, references, python_source)
-
-        if rml_rule['subject_map_type'] == RML_QUOTED_TRIPLES_MAP:
-            if pd.notna(rml_rule['subject_join_conditions']):
-                references.update(references_subject_join)
-                parent_triples_map_rule = get_rml_rule(rml_df, rml_rule['subject_map_value'])
-                parent_data = _materialize_rml_rule(parent_triples_map_rule, rml_df, fnml_df, config,
-                                                    parent_join_references=parent_references_subject_join,
-                                                    nest_level=nest_level + 1)
-                data = _merge_data(data, parent_data, rml_rule, 'subject_join_conditions')
-                data['subject'] = '<< ' + data['parent_triple'] + ' >>'
-                data = data.drop(columns=['parent_triple'])
-            else:
-                parent_triples_map_rule = get_rml_rule(rml_df, rml_rule['subject_map_value'])
-                data = _materialize_rml_rule(parent_triples_map_rule, rml_df, fnml_df, config, data=data,
-                                             nest_level=nest_level + 1)
-                data['subject'] = '<< ' + data['triple'] + ' >>'
-            data['keep_subject' + str(nest_level)] = data['subject']
-        if rml_rule['object_map_type'] == RML_QUOTED_TRIPLES_MAP:
-            if pd.notna(rml_rule['object_join_conditions']):
-                references.update(references_object_join)
-                parent_triples_map_rule = get_rml_rule(rml_df, rml_rule['object_map_value'])
-                parent_data = _materialize_rml_rule(parent_triples_map_rule, rml_df, fnml_df, config,
-                                                    parent_join_references=parent_references_object_join,
-                                                    nest_level=nest_level + 1)
-                data = _merge_data(data, parent_data, rml_rule, 'object_join_conditions')
-                data['object'] = '<< ' + data['parent_triple'] + ' >>'
-                data = data.drop(columns=['parent_triple'])
-            else:
-                parent_triples_map_rule = get_rml_rule(rml_df, rml_rule['object_map_value'])
-                data = _materialize_rml_rule(parent_triples_map_rule, rml_df, fnml_df, config, data=data,
-                                             nest_level=nest_level + 1)
-                data['object'] = '<< ' + data['triple'] + ' >>'
-            if rml_rule['subject_map_type'] == RML_QUOTED_TRIPLES_MAP:
-                data['subject'] = data['keep_subject' + str(nest_level)]
-
-        data = _materialize_rml_rule_terms(data, rml_rule, fnml_df, config)
-
     # elif pd.notna(rml_rule['object_parent_triples_map']):
     elif rml_rule['object_map_type'] == RML_PARENT_TRIPLES_MAP:
 
@@ -331,20 +291,6 @@ def _materialize_rml_rule(rml_rule, rml_df, fnml_df, config, data=None, parent_j
 
         data = _materialize_rml_rule_terms(data, rml_rule, fnml_df, config)
 
-    # TODO: this is slow reduce the number of vectorized operations
-    data['triple'] = data['subject'] + ' ' + data['predicate'] + ' ' + data['object']
-
-    if nest_level == 0 and config.get_output_format() == NQUADS:
-        if rml_rule['graph_map_type'] in [RML_TEMPLATE, RML_CONSTANT, RML_REFERENCE] and rml_rule['graph_map_value'] != RML_DEFAULT_GRAPH:
-            data = _materialize_template(data, rml_rule['graph_map_value'], rml_rule['graph_map_type'], config, 'graph', termtype=RML_IRI)
-        elif rml_rule['graph_map_type'] == RML_EXECUTION:
-            data = _materialize_fnml_execution(data, rml_rule['graph_map_value'], fnml_df, config, 'graph', termtype=RML_IRI)
-        else:
-            data['graph'] = ''
-        data['triple'] = data['triple'] + ' ' + data['graph']
-
-    data = data.drop(columns=['subject', 'predicate', 'object'], errors='ignore')
-
     return data
 
 
@@ -358,18 +304,10 @@ def _materialize_mapping_group_to_set(mapping_group_df, rml_df, fnml_df, config,
 
 
 def _materialize_mapping_group_to_file(mapping_group_df, rml_df, fnml_df, config):
-    triples = set()
     for i, rml_rule in mapping_group_df.iterrows():
-        start_time = time.time()
         data = _materialize_rml_rule(rml_rule, rml_df, fnml_df, config)
-        triples.update(set(data['triple']))
 
-        LOGGER.debug(f"{len(triples)} triples generated for mapping rule `{rml_rule['triples_map_id']}` "
-                      f"in {get_delta_time(start_time)} seconds.")
-
-    triples_to_file(triples, config, mapping_group_df.iloc[0]['mapping_partition'])
-
-    return len(triples)
+    return 0
 
 
 def _materialize_mapping_group_to_kafka(mapping_group_df, rml_df, fnml_df, config, python_source=None):
