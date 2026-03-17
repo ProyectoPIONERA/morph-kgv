@@ -21,6 +21,8 @@ import rdflib.plugins.sparql.evaluate as sparql_evaluate
 from rdflib.plugins.sparql.sparql import QueryContext
 import rdflib.plugins.sparql as sp
 
+from ..materializer import _materialize_mapping_group_to_df
+
 _Triple = Tuple[Identifier, Identifier, Identifier]
 BGP = List[_Triple]
 
@@ -316,7 +318,10 @@ def virtualize_sparql(config, rml_df):
 
         for tp in bgp:
             rml_tp_df = match_triple_pattern(tp, rml_df)
-            print(tp)
+            print(str(tp[0]), str(tp[1]), str(tp[2]))
+            print(rml_tp_df['subject_map_value'])
+            data = _materialize_mapping_group_to_df(rml_tp_df, rml_df, None, config)
+            print('\n--------------------------------------------------------------\n')
 
         # execute BGP
 

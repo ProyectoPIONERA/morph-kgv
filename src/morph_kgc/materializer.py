@@ -303,6 +303,14 @@ def _materialize_mapping_group_to_set(mapping_group_df, rml_df, fnml_df, config,
     return triples
 
 
+def _materialize_mapping_group_to_df(mapping_group_df, rml_df, fnml_df, config):
+    for i, rml_rule in mapping_group_df.iterrows():
+        data = _materialize_rml_rule(rml_rule, rml_df, fnml_df, config)
+        print(data.columns)
+
+    return 0
+
+
 def _materialize_mapping_group_to_file(mapping_group_df, rml_df, fnml_df, config):
     for i, rml_rule in mapping_group_df.iterrows():
         data = _materialize_rml_rule(rml_rule, rml_df, fnml_df, config)
