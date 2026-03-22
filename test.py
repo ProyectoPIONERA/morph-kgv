@@ -5,7 +5,7 @@ store = VIRTStore('testing/c.ini')
 
 graph = Graph(store)
 
-'''
+res = graph.query('''
 PREFIX ub: <http://swat.cse.lehigh.edu/onto/univ-bench.owl#>
 
 SELECT ?x ?y ?z
@@ -14,23 +14,11 @@ WHERE {
   ?x ub:undergraduateDegreeFrom ?y .
   ?x ub:memberOf ?z .
   ?y a ub:University .
-  ?z a ub:Department .
-  ?z ub:subOrganizationOf ?y .
+  OPTIONAL { ?z a ub:Department .
+  ?z ub:subOrganizationOf ?y . }
 }
-'''
-
-res = graph.query('''
-
-PREFIX ub: <http://swat.cse.lehigh.edu/onto/univ-bench.owl#>
-
-SELECT ?x
-WHERE {
-  ?x a ub:Publication .
-  ?x ub:publicationAuthor <http://www.department0.university0.edu/assistantProfessor0> .
-}
-
 ''')
 
-
+print(len(res))
 for row in res:
-    pass
+    print(row)

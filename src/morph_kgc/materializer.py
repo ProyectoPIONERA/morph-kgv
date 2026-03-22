@@ -8,6 +8,7 @@ __email__ = "arenas.guerrero.julian@outlook.com"
 
 from falcon.uri import encode_value
 from urllib.parse import quote
+from rdflib import URIRef, Literal, BNode
 
 from .utils import *
 from .constants import *
@@ -19,6 +20,14 @@ from .data_source.http_api import get_http_api_data
 from .fnml.fnml_executer import execute_fnml
 
 LOGGER = logging.getLogger(LOGGING_NAMESPACE)
+
+
+class LenientURIRef(URIRef):
+    # URIRef subclass that overrides validation
+    def __new__(cls, value):
+        return super(URIRef, cls).__new__(cls, value)
+
+
 
 def _add_references_in_join_condition(rml_rule, references, parent_references):
     references_join, parent_references_join = get_references_in_join_condition(rml_rule, 'object_join_conditions')
@@ -145,6 +154,7 @@ def _materialize_template(results_df, template, expression_type, config, positio
         # add what remains in the template after the last reference
         results_df[position] = results_df[position] + template
 
+    """
     if termtype.strip() == RML_IRI:
         results_df[position] = '<' + results_df[position] + '>'
     elif termtype.strip() == RML_BLANK_NODE:
@@ -154,6 +164,7 @@ def _materialize_template(results_df, template, expression_type, config, positio
     else:
         # this case is for language and datatype maps, do nothing
         pass
+    """
 
     return results_df
 
@@ -183,7 +194,7 @@ def _materialize_fnml_execution(results_df, fnml_execution, fnml_df, config, pos
                     results_df['reference_results'] = results_df['reference_results'].str.replace(char, f'\\{char}', regex=False)
                 else:
                     results_df['reference_results'] = results_df['reference_results'].str.replace(char, f'\\\\{char}', regex=False)
-
+    """
         results_df[position] = '"' + results_df[fnml_execution] + '"'
     elif termtype.strip() == RML_IRI:
         # it is assumed that the IRI values will be correct, and they are not percent encoded
@@ -191,6 +202,7 @@ def _materialize_fnml_execution(results_df, fnml_execution, fnml_df, config, pos
         results_df[position] = '<' + results_df[fnml_execution] + '>'
     elif termtype.strip() == RML_BLANK_NODE:
         results_df[position] = '_:' + results_df[fnml_execution]
+    """
 
     return results_df
 
@@ -221,7 +233,7 @@ def _materialize_rml_rule_terms(results_df, rml_rule, fnml_df, config, columns_a
         elif rml_rule['lang_datatype_map_type'] == RML_EXECUTION:
             results_df = _materialize_fnml_execution(results_df, rml_rule['lang_datatype_map_value'], fnml_df, config,
                                                      'lang_datatype')
-        results_df['object'] = results_df['object'] + '@' + results_df['lang_datatype']
+        results_df['object_lang_datatype'] = results_df['lang_datatype']
     elif rml_rule['lang_datatype'] == RML_DATATYPE_MAP:
         if rml_rule['lang_datatype_map_type'] in [RML_TEMPLATE, RML_CONSTANT, RML_REFERENCE]:
             results_df = _materialize_template(results_df, rml_rule['lang_datatype_map_value'], rml_rule['lang_datatype_map_type'],
@@ -229,7 +241,30 @@ def _materialize_rml_rule_terms(results_df, rml_rule, fnml_df, config, columns_a
         elif rml_rule['lang_datatype_map_type'] == RML_EXECUTION:
             results_df = _materialize_fnml_execution(results_df, rml_rule['lang_datatype_map_value'], fnml_df, config,
                                                      'lang_datatype', termtype=RML_IRI)
-        results_df['object'] = results_df['object'] + '^^' + results_df['lang_datatype']
+        results_df['object_lang_datatype'] = results_df['lang_datatype']
+
+    # TRANSFORM TERMS TO RDFLIB OBJECTS
+    if rml_rule['subject_termtype'] == RML_IRI:
+        results_df["subject"] = results_df["subject"].map(LenientURIRef)
+    elif rml_rule['subject_termtype'] == RML_BLANK_NODE:
+        results_df["subject"] = results_df["subject"].map(BNode)
+
+    results_df["predicate"] = results_df["predicate"].map(LenientURIRef)
+
+    if rml_rule['object_termtype'] == RML_IRI:
+        results_df["object"] = results_df["object"].map(LenientURIRef)
+    if rml_rule['object_termtype'] == RML_BLANK_NODE:
+        results_df["object"] = results_df["object"].map(BNode)
+    if rml_rule['object_termtype'] == RML_LITERAL:
+        if rml_rule['lang_datatype'] == RML_LANGUAGE_MAP:
+            results_df["object"] = results_df["object"].map(lambda x: Literal(x, lang=rml_rule['lang_datatype_map_value']), normalize=False)
+        elif rml_rule['lang_datatype'] == RML_DATATYPE_MAP:
+            datype = URIRef(rml_rule['lang_datatype_map_value'])
+            results_df["object"] = results_df["object"].map(lambda x: Literal(x, datatype=datype, normalize=False))
+        else:
+            results_df["object"] = results_df["object"].map(lambda x: Literal(x, normalize=False))
+
+
 
     return results_df
 
@@ -291,7 +326,7 @@ def _materialize_rml_rule(rml_rule, rml_df, fnml_df, config, data=None, parent_j
 
         data = _materialize_rml_rule_terms(data, rml_rule, fnml_df, config)
 
-    return data
+    return data.drop('reference_results', axis=1)
 
 
 def _materialize_mapping_group_to_set(mapping_group_df, rml_df, fnml_df, config, python_source=None):
@@ -304,11 +339,11 @@ def _materialize_mapping_group_to_set(mapping_group_df, rml_df, fnml_df, config,
 
 
 def _materialize_mapping_group_to_df(mapping_group_df, rml_df, fnml_df, config):
+    dfs = []
     for i, rml_rule in mapping_group_df.iterrows():
-        data = _materialize_rml_rule(rml_rule, rml_df, fnml_df, config)
-        print(data.columns)
+        dfs.append(_materialize_rml_rule(rml_rule, rml_df, fnml_df, config))
 
-    return 0
+    return pd.concat(dfs, ignore_index=True)
 
 
 def _materialize_mapping_group_to_file(mapping_group_df, rml_df, fnml_df, config):
