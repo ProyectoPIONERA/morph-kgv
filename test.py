@@ -6,17 +6,31 @@ store = VIRTStore('testing/c.ini')
 graph = Graph(store)
 
 res = graph.query('''
-PREFIX ub: <http://swat.cse.lehigh.edu/onto/univ-bench.owl#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+PREFIX gtfs: <http://vocab.gtfs.org/terms#>
+PREFIX geo: <http://www.w3.org/2003/01/geo/wgs84_pos#>
+PREFIX dct: <http://purl.org/dc/terms/>
+PREFIX schema: <http://schema.org/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
-SELECT ?x ?y ?z
-WHERE {
-  ?x a ub:GraduateStudent .
-  ?x ub:undergraduateDegreeFrom ?y .
-  ?x ub:memberOf ?z .
-  ?y a ub:University .
-  OPTIONAL { ?z a ub:Department .
-  ?z ub:subOrganizationOf ?y . }
+SELECT * WHERE {
+	?service a gtfs:Service .
+	?service gtfs:serviceRule ?serviceRule .
+
+	?serviceRule a gtfs:CalendarRule .
+	?serviceRule gtfs:sunday "1"^^<http://www.w3.org/2001/XMLSchema#boolean> .
+
+	?trip gtfs:service ?service .
+	?trip gtfs:route ?route  .
+
+	{  ?route gtfs:longName ?longName }
+	UNION
+	{  ?route gtfs:shortName ?shortName }
+	.
 }
+
 ''')
 
 print(len(res))

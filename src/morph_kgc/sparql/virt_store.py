@@ -20,6 +20,7 @@ from rdflib.term import Variable, Identifier
 from rdflib.plugins.sparql.sparql import FrozenBindings, QueryContext
 import rdflib.plugins.sparql.evaluate as sparql_evaluate
 from rdflib.plugins.sparql.sparql import QueryContext
+from rdflib.plugins.sparql import CUSTOM_EVALS
 import rdflib.plugins.sparql as sp
 
 from ..materializer import _materialize_mapping_group_to_df
@@ -645,6 +646,69 @@ def pushdown_bindings_to_sql(
 
 
 
+# -----------------------------------------------------------------------------------------------------
+
+def virt_eval_bgp(ctx: QueryContext, bgp: BGP, rml_df, config):
+
+    for tp in bgp:
+        print(str(tp[0]), str(tp[1]), str(tp[2]))
+
+
+    # first tp in BGP
+    first_tp = bgp[0]
+    rml_tp_df = match_triple_pattern(first_tp, rml_df)
+    print("TP:", first_tp[0], first_tp[1], first_tp[2])
+    print("Number of matched rules:", len(rml_tp_df))
+    rml_tp_df.to_csv('x.csv', index=False)
+
+    rml_tp_df = pushdown_bindings_to_sql((first_tp[0], first_tp[1], first_tp[2]), rml_tp_df, None)
+    for i, row in rml_tp_df.iterrows():
+        #print(row['logical_source_value'], '\n')
+        pass
+
+    data = _materialize_mapping_group_to_df(rml_tp_df, rml_df, None, config)
+    data = rename_triple_columns(data, (first_tp[0], first_tp[1], first_tp[2]))
+    bindings_df = data
+    print('\n--------------------------------------------------------------\n')
+
+    # execute BGP
+    for tp in bgp[1:]:
+        rml_tp_df = match_triple_pattern(tp, rml_df)
+        rml_tp_df = pushdown_bindings_to_sql((tp[0], tp[1], tp[2]), rml_tp_df, bindings_df)
+        for i, row in rml_tp_df.iterrows():
+            print(row['logical_source_value'], '\n')
+        print("TP:", str(tp[0]), str(tp[1]), str(tp[2]))
+        print("Number of matched rules:", len(rml_tp_df))
+
+        data = _materialize_mapping_group_to_df(rml_tp_df, rml_df, None, config)
+        # RENAME DF TO VARIABLE NAMES
+        data = rename_triple_columns(data, (tp[0], tp[1], tp[2]))
+        #print(bindings_df.columns)
+
+        # MERGE DF TO INTERMEDIATE DF
+        bindings_df = natural_join(bindings_df, data, (tp[0], tp[1], tp[2]))
+
+        print('\n--------------------------------------------------------------\n')
+
+    """
+    print(len(bindings_df))
+    bindings_df = bindings_df[bgp_variables(bgp)]
+    for i, row in bindings_df.iterrows():
+        res = ''
+        for var in bgp_variables(bgp):
+            res += row[var] + ' '
+        print(res)
+    """
+
+    # yield/return the results
+    print(bindings_df)
+    for i, row in bindings_df.iterrows():
+        # convert the bindings_df into a FrozenBindings object
+        bindings = dict()
+        for key in bindings_df.columns:
+            bindings[Variable(key)] = row[key]
+        yield FrozenBindings(ctx, bindings)
+    return
 
 
 
@@ -652,95 +716,16 @@ def pushdown_bindings_to_sql(
 # -----------------------------------------------------------------------------------------------------
 # RDFLIB QUERY EXECUTION
 
-def custom_eval(ctx, part):
-    if part.name == "BGP":
-        ordered = order_bgp(ctx, part.triples)
-        return sparql_evaluate.evalBGP(ctx, ordered)
-    raise NotImplementedError
-
-
-
-def virtualize_sparql(config, rml_df):
-    rdflib_evalBGP = sparql_evaluate.evalBGP
-
-    def __evalBGP__(ctx: QueryContext, bgp: BGP):
-        # A SPARQL query executed over a non VIRTStore is evaluated as usual
-        if not isinstance(ctx.graph.store, VIRTStore):
-            return rdflib_evalBGP(ctx, bgp)
-        if not bgp:
-            yield ctx.solution()
-            return
-
-        for tp in bgp:
-            print(str(tp[0]), str(tp[1]), str(tp[2]))
-
-
-        # first tp in BGP
-        first_tp = bgp[0]
-        rml_tp_df = match_triple_pattern(first_tp, rml_df)
-        print("TP:", first_tp[0], first_tp[1], first_tp[2])
-        print("Number of matched rules:", len(rml_tp_df))
-        rml_tp_df.to_csv('x.csv', index=False)
-
-        rml_tp_df = pushdown_bindings_to_sql((first_tp[0], first_tp[1], first_tp[2]), rml_tp_df, None)
-        for i, row in rml_tp_df.iterrows():
-            #print(row['logical_source_value'], '\n')
-            pass
-
-        data = _materialize_mapping_group_to_df(rml_tp_df, rml_df, None, config)
-        data = rename_triple_columns(data, (first_tp[0], first_tp[1], first_tp[2]))
-        bindings_df = data
-        print('\n--------------------------------------------------------------\n')
-
-        # execute BGP
-        for tp in bgp[1:]:
-            rml_tp_df = match_triple_pattern(tp, rml_df)
-            rml_tp_df = pushdown_bindings_to_sql((tp[0], tp[1], tp[2]), rml_tp_df, bindings_df)
-            for i, row in rml_tp_df.iterrows():
-                print(row['logical_source_value'], '\n')
-            print("TP:", str(tp[0]), str(tp[1]), str(tp[2]))
-            print("Number of matched rules:", len(rml_tp_df))
-
-            data = _materialize_mapping_group_to_df(rml_tp_df, rml_df, None, config)
-            # RENAME DF TO VARIABLE NAMES
-            data = rename_triple_columns(data, (tp[0], tp[1], tp[2]))
-            #print(bindings_df.columns)
-
-            # MERGE DF TO INTERMEDIATE DF
-            bindings_df = natural_join(bindings_df, data, (tp[0], tp[1], tp[2]))
-
-            print('\n--------------------------------------------------------------\n')
-
-        """
-        print(len(bindings_df))
-        bindings_df = bindings_df[bgp_variables(bgp)]
-        for i, row in bindings_df.iterrows():
-            res = ''
-            for var in bgp_variables(bgp):
-                res += row[var] + ' '
-            print(res)
-        """
-
-        # yield/return the results
-        print(bindings_df)
-        for i, row in bindings_df.iterrows():
-            # convert the bindings_df into a FrozenBindings object
-            bindings = dict()
-            for key in bindings_df.columns:
-                bindings[Variable(key)] = row[key]
-            yield FrozenBindings(ctx, bindings)
-        return
-
-    # overrides RDFlib evalBGP function
-    sparql_evaluate.evalBGP = __evalBGP__
-
-
-
 class VIRTStore(Store):
+
+    context_aware = False   # set True if your backend supports named graphs
+    formula_aware = False
+    transaction_aware = False
+
+    _EVAL_KEY = "VIRTStore"  # unique key in CUSTOM_EVALS
+
     def __init__(self, config_path: str, configuration=None, identifier=None):
         super(VIRTStore, self).__init__(configuration=configuration, identifier=identifier)
-
-        sp.CUSTOM_EVALS["order_bgp"] = custom_eval
 
         config = load_config_from_argument(config_path)
 
@@ -749,12 +734,59 @@ class VIRTStore(Store):
         # keep only asserted mapping rules
         rml_df = rml_df.loc[rml_df['triples_map_type'] == 'http://w3id.org/rml/TriplesMap']
 
-        virtualize_sparql(config, rml_df)
+        self.rml_df = rml_df
+        self.config = config
 
+        # Register custom_eval — bind it to this instance with a closure
+        CUSTOM_EVALS[self._EVAL_KEY] = self._make_custom_eval()
+
+    # ------------------------------------------------------------------ #
+    # Store lifecycle                                                       #
+    # ------------------------------------------------------------------ #
+
+    #def open(self, configuration: str, create: bool = False) -> Optional[int]:
+        #    # connect to your backend here
+        #    self._connection = self._connect(configuration)
+        #    if self._connection is None:
+        #        return NO_STORE
+        # Register custom_eval — bind it to this instance with a closure
+        #    CUSTOM_EVALS[self._EVAL_KEY] = self._make_custom_eval()
+    #    return VALID_STORE
+
+    #def close(self, commit_pending_transaction: bool = False) -> None:
+        #    CUSTOM_EVALS.pop(self._EVAL_KEY, None)
+        #    if self._connection:
+        #        self._connection.close()
+    #        self._connection = None
+
+    # ------------------------------------------------------------------ #
+    # Custom eval factory — returns a closure that captures `self`         #
+    # ------------------------------------------------------------------ #
+
+    def _make_custom_eval(self):
+        #store = self  # capture the store instance
+
+        def custom_eval(ctx, part):
+            if part.name == "BGP":
+                ordered = order_bgp(ctx, part.triples)
+                return virt_eval_bgp(ctx, ordered, self.rml_df, self.config)
+            # Any other algebra node (FILTER, LeftJoin/OPTIONAL,
+            # UNION, Extend/BIND, etc.) falls back to RDFLib natively.
+            raise NotImplementedError()
+
+        return custom_eval
+
+
+    # ------------------------------------------------------------------ #
+    # Mandatory Store interface methods                                    #
+    # ------------------------------------------------------------------ #
 
     def triples(self, pattern, context) -> Iterable[Triple]:
-        pass
-        return
+        def triples(self, triple_pattern, context=None) -> Iterator[Tuple]:
+            # Used by rdflib for Graph iteration — can delegate to _query_triple
+            s, p, o = triple_pattern
+            for row in self._query_triple(s, p, o):
+                yield row, iter([context])
 
     def create(self, configuration):
         raise TypeError('The VIRT store is read only!')
