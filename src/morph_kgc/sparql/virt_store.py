@@ -659,7 +659,7 @@ def virt_eval_bgp(ctx: QueryContext, bgp: BGP, rml_df, config):
     rml_tp_df = match_triple_pattern(first_tp, rml_df)
     print("TP:", first_tp[0], first_tp[1], first_tp[2])
     print("Number of matched rules:", len(rml_tp_df))
-    rml_tp_df.to_csv('x.csv', index=False)
+    #rml_tp_df.to_csv('x.csv', index=False)
 
     rml_tp_df = pushdown_bindings_to_sql((first_tp[0], first_tp[1], first_tp[2]), rml_tp_df, None)
     for i, row in rml_tp_df.iterrows():
