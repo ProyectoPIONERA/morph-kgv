@@ -8,6 +8,7 @@ __email__ = "arenas.guerrero.julian@outlook.com"
 
 import logging
 import pandas as pd
+import connectorx as cx
 
 from ..constants import *
 
@@ -179,9 +180,8 @@ def get_sql_data(config, rml_rule, references):
         # in case all term maps are constants e.g. R2RML test case R2RMLTC0006a
         return pd.DataFrame(columns=list(references))
 
-    db_connection, db_dialect = _relational_db_connection(config, rml_rule['source_name'])
-    sql_query = _replace_query_enclosing_characters(sql_query, db_dialect)
-
     LOGGER.debug(f"SQL query for mapping rule `{rml_rule['triples_map_id']}`: [{sql_query}]")
 
-    return pd.read_sql_query(sql_query, con=db_connection, coerce_float=False)
+    sql_query = _replace_query_enclosing_characters(sql_query, config.get_db_url(rml_rule['source_name']).split(':')[0].upper)
+
+    return cx.read_sql(config.get_db_url(rml_rule['source_name']), sql_query)

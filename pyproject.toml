@@ -47,7 +47,8 @@ dependencies = [
   'jsonpath-python==1.0.6',# <2.0.0',
   'elementpath>=4.0.0, <5.0.0',
   'duckdb>=1.0.0, <2.0.0',
-  'falcon>=3.0.0, <5.0.0'
+  'falcon>=3.0.0, <5.0.0',
+  'connectorx>=0.4.5'
 ]
 
 [project.scripts]
