@@ -1702,6 +1702,88 @@ def pushdown_bindings_to_sql(
 # SECTION 6 — BGP evaluation
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+
+# ── B12 — Generalized semi-join reduction (dangling tuple elimination) ─────────
+# Classic distributed query processing optimization: reduce intermediate join
+# inputs by iteratively applying semi-joins on shared join variables.
+# Inspired by Bernstein & Chiu (1981): "Using Semi-Joins to Solve Relational Queries".
+
+def semijoin_reduce_bgp(
+    ctx: QueryContext,
+    bgp: list[TriplePattern],
+    rml_df: pd.DataFrame,
+    config: Any,
+    rounds: int = 2,
+) -> list[pd.DataFrame]:
+    """Return one reducer DataFrame per triple pattern.
+
+    Each reducer contains only join-variable columns (variables that appear in
+    at least two triple patterns) reduced by up to `rounds` iterations of
+    pairwise semi-joins on shared variables.
+
+    Reducers can be applied as additional filters on each triple pattern's
+    bindings before expensive joins.
+
+    Notes
+    -----
+    * Minimal and conservative implementation.
+    * Materializes each triple pattern once to compute join-key projections.
+    * If any triple pattern is empty, all reducers are returned empty.
+    """
+
+    if not bgp or len(bgp) < 2:
+        return [pd.DataFrame() for _ in bgp]
+
+    from collections import defaultdict as _dd
+    var_counts: _dd[str, int] = _dd(int)
+    for tp in bgp:
+        for v in set(triple_pattern_variables(tp)):
+            var_counts[v] += 1
+
+    join_vars = {v for v, c in var_counts.items() if c >= 2}
+    if not join_vars:
+        return [pd.DataFrame() for _ in bgp]
+
+    proj: list[pd.DataFrame] = []
+    for tp in bgp:
+        rml_tp_df = match_triple_pattern(tp, rml_df)
+        if rml_tp_df.empty:
+            return [pd.DataFrame() for _ in bgp]
+
+        try:
+            data = _materialize_mapping_group_to_df(rml_tp_df, rml_df, None, config)
+        except ValueError:
+            return [pd.DataFrame() for _ in bgp]
+
+        if data.empty:
+            return [pd.DataFrame() for _ in bgp]
+
+        data = apply_termtypes_to_df(data, rml_tp_df)
+        renamed = rename_triple_columns(data, tp)
+        cols = [c for c in renamed.columns if c in join_vars]
+        proj.append(renamed[cols].drop_duplicates() if cols else pd.DataFrame())
+
+    for _ in range(max(0, rounds)):
+        changed = False
+        for i in range(len(proj)):
+            if proj[i].empty:
+                continue
+            for j in range(len(proj)):
+                if i == j or proj[j].empty:
+                    continue
+                shared = list(set(proj[i].columns) & set(proj[j].columns))
+                if not shared:
+                    continue
+                before = len(proj[i])
+                keys = proj[j][shared].drop_duplicates()
+                proj[i] = proj[i].merge(keys, on=shared, how='inner').drop_duplicates()
+                if len(proj[i]) != before:
+                    changed = True
+        if not changed:
+            break
+
+    return proj
 def virt_eval_bgp(
     ctx: QueryContext,
     bgp: BGP,
@@ -1711,7 +1793,8 @@ def virt_eval_bgp(
     filter_sql: str | None = None,
     distinct: bool = False,
     bloom_filter: bool = True,
-    enforce_constants: bool = False,
+    semijoin_reduction: bool = True,
+    semijoin_rounds: int = 2,
 ) -> Iterator[FrozenBindings]:
     """
     Evaluate a BGP against the heterogeneous data sources described by
@@ -1769,6 +1852,19 @@ def virt_eval_bgp(
     if not bgp:
         return
 
+    # B12 — Optional generalized semi-join reduction
+    reducers: list[pd.DataFrame] = [pd.DataFrame() for _ in bgp]
+    if semijoin_reduction and len(bgp) > 1:
+        try:
+            reducers = semijoin_reduce_bgp(ctx, bgp, rml_df, config, rounds=semijoin_rounds)
+        except Exception:
+            reducers = [pd.DataFrame() for _ in bgp]
+
+    # Helper: access a column even if duplicate labels exist (pandas returns a DataFrame)
+    def _col_series(df: pd.DataFrame, name: str):
+        col = df.loc[:, name]
+        return col.iloc[:, -1] if isinstance(col, pd.DataFrame) else col
+
     if _VIRT_DEBUG:
         print(f"[VIRT_DEBUG] virt_eval_bgp called, bgp={bgp}")
 
@@ -1801,38 +1897,44 @@ def virt_eval_bgp(
             print(f"[VIRT_DEBUG] tp0={first_tp}: data empty → return")
         return
     data = apply_termtypes_to_df(data, rml_tp_df)
-    if enforce_constants:
-        # Correctness: enforce concrete SUBJECT/OBJECT terms at row level for this TP.
-        # This is only enabled for FILTER-equality rewritten BGPs to avoid altering
-        # behaviour of other queries. Predicate is not filtered here.
-        _s, _p, _o = first_tp
-        def _col_series(df: pd.DataFrame, name: str):
-            col = df.loc[:, name]
-            return col.iloc[:, -1] if isinstance(col, pd.DataFrame) else col
-        if not isinstance(_s, Variable) and 'subject' in data.columns:
-            data = data[_col_series(data, 'subject') == _s]
-        if not isinstance(_o, Variable) and 'object' in data.columns:
-            # Handle boolean lexical variants robustly (e.g., '1'^^xsd:boolean vs 'true').
-            if isinstance(_o, Literal) and _o.datatype and str(_o.datatype) == str(XSD.boolean):
-                expected = bool(_o.toPython())
-                ser = _col_series(data, 'object')
-                data = data[ser.apply(lambda v: isinstance(v, Literal) and v.datatype and str(v.datatype)==str(XSD.boolean) and bool(v.toPython())==expected)]
-            else:
-                data = data[_col_series(data, 'object') == _o]
-        if data.empty:
-            if _VIRT_DEBUG:
-                print(f"[VIRT_DEBUG] tp={first_tp}: empty after enforce_constants → return")
-            return
+    # Correctness: enforce concrete SUBJECT/OBJECT terms at row level.
+    # Needed because constants can be dropped later when rename_triple_columns
+    # removes non-variable positions (e.g., after FILTER equality rewrite).
+    _s, _p, _o = first_tp
+    if not isinstance(_s, Variable) and 'subject' in data.columns:
+        data = data[_col_series(data, 'subject') == _s]
+    if not isinstance(_o, Variable) and 'object' in data.columns:
+        # Booleans may have lexical variants ('1'/'0' vs 'true'/'false'); compare by value.
+        if isinstance(_o, Literal) and _o.datatype and str(_o.datatype) == str(XSD.boolean):
+            expected = bool(_o.toPython())
+            ser = _col_series(data, 'object')
+            data = data[ser.apply(lambda v: isinstance(v, Literal) and v.datatype and str(v.datatype)==str(XSD.boolean) and bool(v.toPython())==expected)]
+        else:
+            data = data[_col_series(data, 'object') == _o]
+    if data.empty:
+        if _VIRT_DEBUG:
+            print(f"[VIRT_DEBUG] tp0={first_tp}: data empty after constant-term filter → return")
+        return
     if _VIRT_DEBUG:
         if "object" in data.columns and not data.empty:
             _sample = data["object"].dropna().iloc[0] if not data["object"].dropna().empty else None
             print(f"[VIRT_DEBUG] apply_termtypes_to_df tp0={first_tp}: object sample={_sample!r} type={type(_sample).__name__}")
     bindings_df = rename_triple_columns(data, first_tp)
+    # B12 — Apply semijoin reducer for tp0 (join-variable pruning)
+    if semijoin_reduction and reducers and len(reducers) > 0 and not reducers[0].empty:
+        shared = list(set(bindings_df.columns) & set(reducers[0].columns))
+        if shared:
+            before = len(bindings_df)
+            bindings_df = bindings_df.merge(reducers[0][shared].drop_duplicates(), on=shared, how='inner')
+            if _VIRT_DEBUG:
+                print(f"[VIRT_DEBUG] B12 semijoin tp0: before={before} after={len(bindings_df)}")
+            if bindings_df.empty:
+                return
     if _VIRT_DEBUG:
         print(f"  bindings_df cols={list(bindings_df.columns)} rows={len(bindings_df)}")
 
     # ── Remaining triple patterns (bind-join) ─────────────────────────────────
-    for tp in bgp[1:]:
+    for tp_idx, tp in enumerate(bgp[1:], start=1):
         rml_tp_df = match_triple_pattern(tp, rml_df)
         if rml_tp_df.empty:
             if _VIRT_DEBUG:
@@ -1856,33 +1958,42 @@ def virt_eval_bgp(
                 print(f"[VIRT_DEBUG] tp={tp}: data empty → return")
             return
         data = apply_termtypes_to_df(data, rml_tp_df)
-        if enforce_constants:
-            # Correctness: enforce concrete SUBJECT/OBJECT terms at row level for this TP.
-            # This is only enabled for FILTER-equality rewritten BGPs to avoid altering
-            # behaviour of other queries. Predicate is not filtered here.
-            _s, _p, _o = tp
-            def _col_series(df: pd.DataFrame, name: str):
-                col = df.loc[:, name]
-                return col.iloc[:, -1] if isinstance(col, pd.DataFrame) else col
-            if not isinstance(_s, Variable) and 'subject' in data.columns:
-                data = data[_col_series(data, 'subject') == _s]
-            if not isinstance(_o, Variable) and 'object' in data.columns:
-                # Handle boolean lexical variants robustly (e.g., '1'^^xsd:boolean vs 'true').
-                if isinstance(_o, Literal) and _o.datatype and str(_o.datatype) == str(XSD.boolean):
-                    expected = bool(_o.toPython())
-                    ser = _col_series(data, 'object')
-                    data = data[ser.apply(lambda v: isinstance(v, Literal) and v.datatype and str(v.datatype)==str(XSD.boolean) and bool(v.toPython())==expected)]
-                else:
-                    data = data[_col_series(data, 'object') == _o]
-            if data.empty:
-                if _VIRT_DEBUG:
-                    print(f"[VIRT_DEBUG] tp={tp}: empty after enforce_constants → return")
-                return
+        # Correctness: enforce concrete SUBJECT/OBJECT terms at row level.
+        # Needed because constants can be dropped later when rename_triple_columns
+        # removes non-variable positions (e.g., after FILTER equality rewrite).
+        _s, _p, _o = tp
+        if not isinstance(_s, Variable) and 'subject' in data.columns:
+            data = data[_col_series(data, 'subject') == _s]
+        if not isinstance(_o, Variable) and 'object' in data.columns:
+            # Booleans may have lexical variants ('1'/'0' vs 'true'/'false'); compare by value.
+            if isinstance(_o, Literal) and _o.datatype and str(_o.datatype) == str(XSD.boolean):
+                expected = bool(_o.toPython())
+                ser = _col_series(data, 'object')
+                data = data[ser.apply(lambda v: isinstance(v, Literal) and v.datatype and str(v.datatype)==str(XSD.boolean) and bool(v.toPython())==expected)]
+            else:
+                data = data[_col_series(data, 'object') == _o]
+        if data.empty:
+            if _VIRT_DEBUG:
+                print(f"[VIRT_DEBUG] tp={tp}: data empty after constant-term filter → return")
+            return
         if _VIRT_DEBUG:
             if "object" in data.columns and not data.empty:
                 _sample = data["object"].dropna().iloc[0] if not data["object"].dropna().empty else None
                 print(f"[VIRT_DEBUG] apply_termtypes_to_df tp={tp}: object sample={_sample!r} type={type(_sample).__name__}")
         data = rename_triple_columns(data, tp)
+
+        # B12 — Apply semijoin reducer for this tp (join-variable pruning)
+        if semijoin_reduction and reducers and tp_idx < len(reducers):
+            red = reducers[tp_idx]
+            if red is not None and not red.empty:
+                shared = list(set(data.columns) & set(red.columns))
+                if shared:
+                    before = len(data)
+                    data = data.merge(red[shared].drop_duplicates(), on=shared, how='inner')
+                    if _VIRT_DEBUG:
+                        print(f"[VIRT_DEBUG] B12 semijoin tp={tp}: before={before} after={len(data)}")
+                    if data.empty:
+                        return
 
         # ── B11 — Bloom filter pre-join probe ─────────────────────────────────
         # Build a Bloom filter from the join-key values already in bindings_df
@@ -2112,6 +2223,13 @@ class VIRTStore(Store):
         self.config       = config
         self.bloom_filter = bloom_filter
 
+        # B12 — Semijoin reduction toggle (disabled by default)
+        self.semijoin_reduction = _os.environ.get('VIRT_SEMIJOIN', '0') == '1'
+        try:
+            self.semijoin_rounds = int(_os.environ.get('VIRT_SEMIJOIN_ROUNDS', '2'))
+        except Exception:
+            self.semijoin_rounds = 2
+
         CUSTOM_EVALS[self._EVAL_KEY] = self._make_custom_eval()
 
     def __del__(self) -> None:
@@ -2202,8 +2320,9 @@ class VIRTStore(Store):
                         self.rml_df,
                         self.config,
                         filter_sql=sql_frag,
-                        enforce_constants=True,
                         bloom_filter=self.bloom_filter,
+                        semijoin_reduction=self.semijoin_reduction,
+                        semijoin_rounds=self.semijoin_rounds,
                     )
 
                     def _augment(
@@ -2310,6 +2429,8 @@ class VIRTStore(Store):
                             ctx, ordered, self.rml_df, self.config,
                             distinct=True,
                             bloom_filter=self.bloom_filter,
+                        semijoin_reduction=self.semijoin_reduction,
+                        semijoin_rounds=self.semijoin_rounds,
                         )
                     )
                     # Python-level dedup as correctness backstop for
@@ -2435,6 +2556,8 @@ class VIRTStore(Store):
                         ctx, ordered_p2, self.rml_df, self.config,
                         initial_bindings_df=left_df,
                         bloom_filter=self.bloom_filter,
+                        semijoin_reduction=self.semijoin_reduction,
+                        semijoin_rounds=self.semijoin_rounds,
                     )
                 )
             else:

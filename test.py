@@ -4,6 +4,9 @@ import time
 
 
 """
+# VIRT_DEBUG=1 python your_script.py
+# semijoin_reduction: bool = False
+
 # Default — B11 enabled
 store = VIRTStore("config.ini")
 
@@ -33,14 +36,28 @@ PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 PREFIX gtfs: <http://vocab.gtfs.org/terms#>
 PREFIX geo: <http://www.w3.org/2003/01/geo/wgs84_pos#>
 PREFIX dct: <http://purl.org/dc/terms/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+PREFIX gtfsaccessible: <http://transport.linkeddata.es/resource/WheelchairBoardingStatus/>
+PREFIX gtfslocation: <http://transport.linkeddata.es/resource/LocationType/>
 
-SELECT * WHERE {
-	?shape a gtfs:Shape .
-	?shape gtfs:shapePoint ?shapePoint .
-	?shapePoint geo:lat ?shape_pt_lat .
-	?shapePoint geo:long ?shape_pt_lon .
-	?shapePoint gtfs:pointSequence ?shape_pt_sequence .
-}
+SELECT ?longName (count(?name) as ?count)
+WHERE { 	
+	?route a gtfs:Route .
+	?route gtfs:longName ?longName .
+ 
+	?trip a gtfs:Trip .
+	?trip gtfs:route ?route .
+ 
+	?stopTime a gtfs:StopTime .
+	?stopTime gtfs:trip ?trip .
+	?stopTime gtfs:stop ?stop .
+ 
+ 	?stop a gtfs:Stop .
+ 	?stop foaf:name  ?name .
+
+ 	?stop gtfs:wheelchairAccessible gtfsaccessible:1 .	
+ 	
+} GROUP BY ?longName
 ''')
 
 
