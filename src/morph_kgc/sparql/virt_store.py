@@ -11,6 +11,7 @@ __email__ = "julian.arenas.guerrero@upm.es"
 import hashlib
 import re
 import warnings
+import math
 from collections import defaultdict
 from functools import lru_cache
 from typing import Any, Iterable, Iterator, List, Optional, Tuple
@@ -770,39 +771,87 @@ def _is_bound(term: RDFTerm, ctx: QueryContext, bound_vars: set) -> bool:
     return term in bound_vars or ctx[term] is not None
 
 
-def _triple_score(
-    triple: TriplePattern, ctx: QueryContext, bound_vars: set
-) -> tuple[int, int, int, int]:
-    """
-    Four-level heuristic score (lower = execute earlier):
 
-    0 — connectivity  : 1 if fully disconnected from prior results
-    1 — predicate     : 1 if predicate is a known low-selectivity URI
-    2 — unbound count : number of free variable positions
-    3 — positional    : weighted sum (subject=1, object=2, predicate=3)
+def _triple_score(
+    triple: TriplePattern,
+    ctx: QueryContext,
+    bound_vars: set,
+    rml_df: pd.DataFrame,
+) -> tuple[int, float]:
     """
+    Cost-based heuristic score (lower = better).
+
+    Structure:
+        (connectivity, combined_cost)
+
+    combined_cost is a weighted sum of:
+        - mapping-aware selectivity (log-normalized)
+        - number of unbound variables
+        - predicate selectivity penalty
+        - positional heuristic
+    """
+
     s, p, o = triple
+
+    # ── Hard constraint: connectivity ────────────────────────────────
     connected = any(
-        isinstance(t, Variable) and _is_bound(t, ctx, bound_vars) for t in triple
+        isinstance(t, Variable) and _is_bound(t, ctx, bound_vars)
+        for t in triple
     )
     l0 = 0 if (not bound_vars or connected) else 1
-    l1 = 1 if (isinstance(p, URIRef) and str(p) in LOW_SELECTIVITY_PREDICATES) else 0
-    l2 = l3 = 0
+
+    # ── Mapping-aware selectivity (log-normalized) ───────────────────
+    try:
+        rml_tp_df = match_triple_pattern(triple, rml_df)
+        rule_count = len(rml_tp_df)
+    except Exception:
+        rule_count = 1000  # fallback worst case
+
+    # log normalization (avoids dominance)
+    cost_mapping = math.log(rule_count + 1)
+
+    # ── Unbound variables ────────────────────────────────────────────
+    unbound_count = sum(
+        1 for term in triple if not _is_bound(term, ctx, bound_vars)
+    )
+
+    # ── Predicate selectivity ────────────────────────────────────────
+    predicate_penalty = 1.0 if (
+        isinstance(p, URIRef) and str(p) in LOW_SELECTIVITY_PREDICATES
+    ) else 0.0
+
+    # ── Positional heuristic ─────────────────────────────────────────
+    positional_weight = 0
     for pos, term in enumerate(triple):
         if not _is_bound(term, ctx, bound_vars):
-            l2 += 1
-            l3 += _position_weight(pos)
-    return (l0, l1, l2, l3)
+            positional_weight += _position_weight(pos)
+
+    # ── Weighted cost (tunable constants) ────────────────────────────
+    α = 1.0
+    β = 1.0
+    γ = 0.5
+    δ = 0.2
+
+    combined_cost = (
+        α * cost_mapping
+        + β * unbound_count
+        + γ * predicate_penalty
+        + δ * positional_weight
+    )
+
+    return (l0, combined_cost)
 
 
-def order_bgp(ctx: QueryContext, bgp: list[TriplePattern]) -> list[TriplePattern]:
+
+def order_bgp(
+    ctx: QueryContext,
+    bgp: list[TriplePattern],
+    rml_df: pd.DataFrame,
+) -> list[TriplePattern]:
     """
-    Reorder BGP triple patterns for efficient bind-join left-deep evaluation.
-
-    Uses a greedy one-pick-at-a-time strategy: at each step the triple with
-    the lowest heuristic score is chosen and its variables added to
-    ``bound_vars`` so subsequent triples benefit from the join.
+    Cost-based BGP ordering with connectivity constraint.
     """
+
     if len(bgp) <= 1:
         return list(bgp)
 
@@ -810,21 +859,26 @@ def order_bgp(ctx: QueryContext, bgp: list[TriplePattern]) -> list[TriplePattern
         t for triple in bgp for t in triple
         if isinstance(t, Variable) and ctx[t] is not None
     }
+
     remaining = list(bgp)
     ordered: list[TriplePattern] = []
 
     while remaining:
         best = min(
             range(len(remaining)),
-            key=lambda i: _triple_score(remaining[i], ctx, bound_vars),
+            key=lambda i: _triple_score(
+                remaining[i], ctx, bound_vars, rml_df
+            ),
         )
         chosen = remaining.pop(best)
         ordered.append(chosen)
+
         for t in chosen:
             if isinstance(t, Variable):
                 bound_vars.add(t)
 
     return ordered
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -866,7 +920,7 @@ def _compile_rml_template(template: str) -> tuple[re.Pattern, list[str]]:
             count = ref_count.get(safe, 0)
             ref_count[safe] = count + 1
             group = safe if count == 0 else f"{safe}_{count}"
-            parts.append(f"(?P<{group}>.+?)")
+            parts.append(f"(?P<{group}>[^/{{}}]+)")
             i = j + 1
         else:
             parts.append(re.escape(ch))
@@ -1452,41 +1506,51 @@ def _compute_ref_values_for_rule(
     has_bindings: bool,
     bindings_df: pd.DataFrame | None,
 ) -> dict[str, list[str]] | None:
-    """
-    A6 — Compute the ``{column: [values]}`` pushdown dict for a single mapping
-    rule given the three (pat_term, map_type, map_value) position triples.
+    """Compute the {column: [values]} pushdown dict for a single mapping rule.
 
-    Returns ``None`` if any position is structurally incompatible (signals that
-    the rule should be skipped entirely).  Returns ``{}`` if there are no
-    constraints to inject (rule is compatible but produces no WHERE conditions).
+    Returns ``None`` when the rule is impossible given current bindings:
+      - a concrete term is structurally incompatible with the mapping rule, or
+      - a bound join variable has **no** values compatible with the rule.
 
-    Extracting this logic from the ``iterrows`` loop allows the caller to cache
-    results keyed by ``(map_type, map_value)`` tuples — rules that share the
-    same mapping configuration produce identical WHERE conditions and need only
-    be computed once per unique configuration.
+    IMPORTANT: When a join variable contains mixed bindings from multiple
+    subject templates (e.g., Stops + ShapePoints), incompatibilities are
+    expected. We therefore *skip* incompatible binding values and only abort
+    when *all* values are incompatible for that rule.
     """
     ref_values: dict[str, list[str]] = {}
 
     for pat_term, map_type, map_value in positions:
+        # Variable position: derive WHERE conditions from current bindings.
         if isinstance(pat_term, Variable):
             var_name = str(pat_term)
             if has_bindings and bindings_df is not None and var_name in bindings_df.columns:
+                any_compatible = False
                 for term_val in bindings_df[var_name].dropna().unique():
                     refs = _extract_references_from_term(term_val, map_type, map_value)
                     if refs is None:
-                        return None  # structurally incompatible — prune rule
+                        # Mixed-template bindings are common; ignore values
+                        # that cannot be reverse-matched against this rule.
+                        continue
+                    any_compatible = True
                     for ref, vals in refs.items():
                         ref_values.setdefault(ref, []).extend(
                             vals if isinstance(vals, list) else [vals]
                         )
-        else:
-            refs = _extract_references_from_term(pat_term, map_type, map_value)
-            if refs is None:
-                return None  # structurally incompatible — prune rule
-            for ref, vals in refs.items():
-                ref_values.setdefault(ref, []).extend(
-                    vals if isinstance(vals, list) else [vals]
-                )
+
+                # Variable is bound but none of its values match this rule.
+                # The rule cannot contribute to the join, so prune it.
+                if not any_compatible:
+                    return None
+            continue
+
+        # Concrete term position: must be compatible, otherwise prune rule.
+        refs = _extract_references_from_term(pat_term, map_type, map_value)
+        if refs is None:
+            return None
+        for ref, vals in refs.items():
+            ref_values.setdefault(ref, []).extend(
+                vals if isinstance(vals, list) else [vals]
+            )
 
     return ref_values
 
@@ -1634,6 +1698,9 @@ def pushdown_bindings_to_sql(
     new_types:  dict[Any, str] = {}
     new_values: dict[Any, str] = {}
 
+    # Rules impossible given current bindings are pruned when bindings exist.
+    rows_to_drop: list[Any] = []
+
     # A6 — per-call cache: (pos0_type, pos0_val, pos1_type, pos1_val, ...) → ref_values
     # Avoids recomputing _extract_references_from_term for rules with identical configs.
     _config_cache: dict[tuple, dict[str, list[str]] | None] = {}
@@ -1662,7 +1729,16 @@ def pushdown_bindings_to_sql(
             )
         ref_values = _config_cache[config_key]
 
-        if ref_values is None or not ref_values:
+        # If the rule cannot match any of the current bindings, prune it to
+        # avoid scanning an entire source table only to have the join discard
+        # the rows later.
+        if ref_values is None:
+            if has_bindings:
+                rows_to_drop.append(row.Index)
+            continue
+
+        # No constraints to inject: compatible rule but no WHERE conditions.
+        if not ref_values:
             continue
 
         conditions = _build_conditions(ref_values)
@@ -1685,16 +1761,27 @@ def pushdown_bindings_to_sql(
         new_type, new_sql = _build_projected_sql(src_type, src_val, [], conditions, distinct=distinct)
         new_types[row.Index]  = new_type
         new_values[row.Index] = new_sql
-
-    if not new_values:
+    if not new_values and not rows_to_drop:
         # No mutations needed — return original DataFrame without any copy
         return rml_df
-
-    # OPT-11 + A6 — single copy, then two vectorised loc[] assignments
+    # OPT-11 + A6 — single copy, then vectorised pruning and loc[] assignments
     result_df = rml_df.copy()
+
+    # Prune rules that cannot join with the current bindings.
+    if rows_to_drop:
+        result_df = result_df.drop(index=rows_to_drop)
+
     if new_types:
-        result_df.loc[list(new_types.keys()), "logical_source_type"] = list(new_types.values())
-    result_df.loc[list(new_values.keys()), "logical_source_value"] = list(new_values.values())
+        # Only assign into surviving rows.
+        idx = [i for i in new_types.keys() if i in result_df.index]
+        if idx:
+            result_df.loc[idx, "logical_source_type"] = [new_types[i] for i in idx]
+
+    if new_values:
+        idx = [i for i in new_values.keys() if i in result_df.index]
+        if idx:
+            result_df.loc[idx, "logical_source_value"] = [new_values[i] for i in idx]
+
     return result_df
 
 
@@ -1793,7 +1880,7 @@ def virt_eval_bgp(
     filter_sql: str | None = None,
     distinct: bool = False,
     bloom_filter: bool = True,
-    semijoin_reduction: bool = True,
+    semijoin_reduction: bool = False,
     semijoin_rounds: int = 2,
 ) -> Iterator[FrozenBindings]:
     """
@@ -2255,7 +2342,7 @@ class VIRTStore(Store):
             if part.name == "BGP":
                 if _VIRT_DEBUG:
                     print(f"[VIRT_DEBUG] custom_eval BGP handler: {part.triples}")
-                ordered = order_bgp(ctx, part.triples)
+                ordered = order_bgp(ctx, part.triples, self.rml_df)
                 return iter(
                     list(virt_eval_bgp(ctx, ordered, self.rml_df, self.config, bloom_filter=self.bloom_filter))
                 )
@@ -2300,7 +2387,7 @@ class VIRTStore(Store):
                     )
                     # Re-extract equality dict for result augmentation.
                     equalities, _ = _extract_equalities(filter_expr)
-                    ordered_bgp = order_bgp(ctx, bgp_triples)
+                    ordered_bgp = order_bgp(ctx, bgp_triples, self.rml_df)
 
                     sql_frag: str | None = None
                     if (
@@ -2423,7 +2510,7 @@ class VIRTStore(Store):
                 # (Filter, Join, Union, …) fall back to Python-level
                 # deduplication via a seen-set, which is still correct.
                 if part.p.name == "BGP":
-                    ordered = order_bgp(ctx, part.p.triples)
+                    ordered = order_bgp(ctx, part.p.triples, self.rml_df)
                     rows = list(
                         virt_eval_bgp(
                             ctx, ordered, self.rml_df, self.config,
@@ -2470,7 +2557,7 @@ class VIRTStore(Store):
                 return
 
             left_df = _rows_to_bindings_df(left_rows)
-            ordered_p2 = order_bgp(ctx, part.p2.triples)
+            ordered_p2 = order_bgp(ctx, part.p2.triples, self.rml_df)
             right_rows = list(
                 virt_eval_bgp(
                     ctx, ordered_p2, self.rml_df, self.config,
@@ -2550,7 +2637,7 @@ class VIRTStore(Store):
 
             if part.p2.name == "BGP":
                 left_df = _rows_to_bindings_df(left_rows)
-                ordered_p2 = order_bgp(ctx, part.p2.triples)
+                ordered_p2 = order_bgp(ctx, part.p2.triples, self.rml_df)
                 right_rows = list(
                     virt_eval_bgp(
                         ctx, ordered_p2, self.rml_df, self.config,

@@ -4,14 +4,21 @@ import time
 
 
 """
-# VIRT_DEBUG=1 python your_script.py
-# semijoin_reduction: bool = False
-
 # Default — B11 enabled
 store = VIRTStore("config.ini")
 
 # Disabled — useful for benchmarking
 store = VIRTStore("config.ini", bloom_filter=False)
+
+# Semijoin reduction
+semijoin_reduction: bool = False,
+
+# Order BGP costs
+# ── Weighted cost (tunable constants) ────────────────────────────
+    α = 1.0
+    β = 1.0
+    γ = 0.5
+    δ = 0.2
 
 # Tune thresholds at module level if needed
 import morph_kgc.sparql.virt_store as vs
@@ -30,39 +37,21 @@ graph = Graph(store)
 start = time.perf_counter()
 
 res = graph.query('''
-PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-PREFIX foaf: <http://xmlns.com/foaf/0.1/>
-PREFIX gtfs: <http://vocab.gtfs.org/terms#>
-PREFIX geo: <http://www.w3.org/2003/01/geo/wgs84_pos#>
-PREFIX dct: <http://purl.org/dc/terms/>
-PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-PREFIX gtfsaccessible: <http://transport.linkeddata.es/resource/WheelchairBoardingStatus/>
-PREFIX gtfslocation: <http://transport.linkeddata.es/resource/LocationType/>
+PREFIX ub: <http://swat.cse.lehigh.edu/onto/univ-bench.owl#>
 
-SELECT ?longName (count(?name) as ?count)
-WHERE { 	
-	?route a gtfs:Route .
-	?route gtfs:longName ?longName .
- 
-	?trip a gtfs:Trip .
-	?trip gtfs:route ?route .
- 
-	?stopTime a gtfs:StopTime .
-	?stopTime gtfs:trip ?trip .
-	?stopTime gtfs:stop ?stop .
- 
- 	?stop a gtfs:Stop .
- 	?stop foaf:name  ?name .
-
- 	?stop gtfs:wheelchairAccessible gtfsaccessible:1 .	
- 	
-} GROUP BY ?longName
+SELECT ?x ?y
+WHERE {
+  ?x a ub:Chair .
+  ?x ub:worksFor ?y .
+  ?y a ub:Department .
+  ?y ub:subOrganizationOf <http://www.university0.edu> .
+}
 ''')
 
 
 for row in res:
-    print(row)
+	#print(row)
+	pass
 print(len(res))
 
 
