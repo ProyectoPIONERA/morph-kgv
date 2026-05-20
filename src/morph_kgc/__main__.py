@@ -1,98 +1,188 @@
-__author__ = "Julián Arenas-Guerrero"
-__credits__ = ["Julián Arenas-Guerrero"]
+#!/usr/bin/env python3
+"""
+main.py \u2014 VIRTStore SPARQL endpoint.
 
-__license__ = "Apache-2.0"
-__maintainer__ = "Julián Arenas-Guerrero"
-__email__ = "arenas.guerrero.julian@outlook.com"
+Serves a Morph-KGC mapping configuration as a SPARQL 1.1 endpoint backed by
+VIRTStore, using rdflib-endpoint (FastAPI + YASGUI).
 
+Usage
+-----
+  python main.py serve config.ini
+
+  # Custom host / port
+  python main.py serve config.ini --host 0.0.0.0 --port 9000
+
+  # Disable Bloom-filter pre-join probe (B11) \u2014 useful for benchmarking
+  python main.py serve config.ini --no-bloom
+
+  # Enable per-step SQL debug traces
+  python main.py serve config.ini --debug
+
+  # Expose under a sub-path (e.g. behind a reverse proxy)
+  python main.py serve config.ini --public-url https://example.org/sparql/
+
+  # Enable hot-reload (development only)
+  python main.py serve config.ini --reload
+
+Then open http://<host>:<port> to use the YASGUI editor,
+or send queries directly to http://<host>:<port>/sparql.
+
+Installation
+------------
+  pip install "rdflib-endpoint[web]" click morph-kgc
+"""
+
+import os
 import sys
-import time
-import logging
+from pathlib import Path
 
-import multiprocessing as mp
+import click
+import uvicorn
+from rdflib import Graph
+from .endpoint import SparqlEndpoint
 
-from itertools import repeat
+# ---------------------------------------------------------------------------
+# Default example query shown in the YASGUI editor tab
+# ---------------------------------------------------------------------------
+_DEFAULT_EXAMPLE_QUERY = """\
+PREFIX rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
-from .args_parser import load_config_from_command_line
-from .materializer import _materialize_mapping_group_to_file
-from .materializer import _materialize_mapping_group_to_kafka
-from .utils import get_delta_time
-from .mapping.mapping_parser import retrieve_mappings
-from .constants import LOGGING_NAMESPACE, RML_TRIPLES_MAP_CLASS
-from .utils import prepare_output_files
+SELECT * WHERE {
+    ?s ?p ?o .
+} LIMIT 100
+"""
 
 
-LOGGER = logging.getLogger(LOGGING_NAMESPACE)
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+@click.group()
+def cli() -> None:
+    """Serve a Morph-KGC mapping configuration as a SPARQL endpoint."""
 
 
-def main():
+@cli.command(help="Serve a Morph-KGC config.ini as a SPARQL endpoint via VIRTStore.")
+@click.argument("config", metavar="CONFIG_INI")
+@click.option("--host",       default="localhost", show_default=True, help="Bind host.")
+@click.option("--port",       default=8000,        show_default=True, help="Bind port.", type=int)
+@click.option("--public-url", default=None,        help="Public base URL (for reverse-proxy deployments).")
+@click.option("--title",      default="VIRTStore SPARQL Endpoint", show_default=True, help="Endpoint title shown in the UI.")
+@click.option("--reload",     is_flag=True, default=False, help="Enable uvicorn hot-reload (development only).")
+def serve(
+    config: str,
+    host: str,
+    port: int,
+    public_url: "str | None",
+    title: str,
+    reload: bool,
+) -> None:
+    _run_serve(
+        config=config,
+        host=host,
+        port=port,
+        public_url=public_url,
+        title=title,
+        reload=reload,
+    )
 
-    config = load_config_from_command_line()
 
-    from .constants import JELLY
+# ---------------------------------------------------------------------------
+# Core logic (importable for testing / programmatic use)
+# ---------------------------------------------------------------------------
 
-    if config.get_output_format() == JELLY:
-        try:
-            import pyjelly
-        except ImportError as e:
-            raise RuntimeError(
-                "JELLY output requested, but pyjelly[rdflib] is not installed. "
-                "Install: pip install 'morph-kgc[jelly]'"
-            ) from e
+def _run_serve(
+    config: str,
+    host: str = "localhost",
+    port: int = 8000,
+    public_url: "str | None" = None,
+    title: str = "VIRTStore SPARQL Endpoint",
+    bloom_filter: bool = True,
+    debug: bool = False,
+    reload: bool = False,
+) -> None:
+    """Initialise VIRTStore, build the FastAPI app, and start uvicorn."""
 
-        from . import materialize
-        from .utils import create_dirs_in_path
+    # -- Enable VIRT_DEBUG before VIRTStore is imported --------------------
+    # _VIRT_DEBUG is read at module-level inside virt_store.py, so the env
+    # var must be set *before* the first import of morph_kgc.
+    if debug:
+        os.environ["VIRT_DEBUG"] = "1"
+        click.echo(click.style("DEBUG", fg="yellow") + ": VIRT_DEBUG traces enabled")
 
-        import sys
+    # -- Lazy import (respects the VIRT_DEBUG flag set above) --------------
+    try:
+        from morph_kgc import VIRTStore
+    except ImportError as exc:
+        msg = str(exc)
+        click.echo(
+            click.style("ERROR", fg="red")
+            + ": could not import VIRTStore -- " + msg + "\n"
+            + "  Make sure morph-kgc is installed: pip install morph-kgc"
+        )
+        sys.exit(1)
 
-        config_path = sys.argv[1] if len(sys.argv) > 1 else None
+    # -- Validate config path ----------------------------------------------
+    config_path = Path(config).resolve()
+    if not config_path.exists():
+        click.echo(
+            click.style("ERROR", fg="red")
+            + ": config file not found: " + config
+        )
+        sys.exit(1)
 
-        if not config_path:
-            LOGGER.error("Config path is missing. Usage: python -m morph_kgc <config.ini>")
-            sys.exit(2)
+    # -- Build VIRTStore + RDFLib Graph ------------------------------------
+    click.echo(
+        click.style("INFO", fg="green")
+        + ": Loading VIRTStore -> " + str(config_path)
+    )
+    store = VIRTStore(str(config_path), bloom_filter=bloom_filter)
+    graph = Graph(store)
 
-        graph = materialize(config_path)
-        output_path = config.get_output_file_path(None)
-        create_dirs_in_path(output_path)
-        graph.serialize(destination=output_path, format="jelly")
+    bloom_status = "enabled" if bloom_filter else "disabled (--no-bloom)"
+    click.echo(
+        click.style("INFO", fg="green")
+        + ": Bloom filter B11: " + bloom_status
+    )
 
-        LOGGER.info(f'Jelly file generated: {output_path}')
-        LOGGER.info(f'Materialization finished.')
-        sys.exit(0)
+    # -- Resolve public URL ------------------------------------------------
+    resolved_public_url = public_url or ("http://" + host + ":" + str(port) + "/")
 
-    rml_df, fnml_df, http_api_df = retrieve_mappings(config)
-    config.set('CONFIGURATION', 'http_api_df', http_api_df.to_csv())
+    # -- Build SparqlEndpoint (FastAPI app) ---------------------------------
+    app = SparqlEndpoint(
+        graph=graph,
+        path="/sparql",
+        cors_enabled=True,
+        title=title,
+        description=(
+            "A SPARQL 1.1 endpoint powered by **VIRTStore** (Morph-KGC virtual RDF graphs).\n\n"
+            "Query your relational data sources using SPARQL without materialising the full graph.\n\n"
+            "[Source code](https://github.com/vemonet/rdflib-endpoint)"
+        ),
+        version="1.0.0",
+        public_url=resolved_public_url,
+        enable_update=False,
+        example_query=_DEFAULT_EXAMPLE_QUERY,
+    )
 
-    # keep only asserted mapping rules
-    asserted_mapping_df = rml_df.loc[rml_df['triples_map_type'] == RML_TRIPLES_MAP_CLASS]
-    mapping_groups = [group for _, group in asserted_mapping_df.groupby(by='mapping_partition')]
+    # -- Start server -------------------------------------------------------
+    base_url = "http://" + host + ":" + str(port)
+    click.echo(click.style("INFO", fg="green") + ": SPARQL endpoint ready at " + base_url)
+    click.echo(click.style("INFO", fg="green") + ":   YASGUI editor  -> " + base_url)
+    click.echo(click.style("INFO", fg="green") + ":   SPARQL service -> " + base_url + "/sparql")
 
-    prepare_output_files(config, rml_df)
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        reload=reload,
+    )
 
-    start_time = time.time()
-    num_triples = 0
-    if config.is_multiprocessing_enabled():
-        LOGGER.debug(f'Parallelizing with {config.get_number_of_processes()} cores.')
 
-        pool = mp.Pool(config.get_number_of_processes())
-        if not config.get_output_kafka_server():
-            num_triples = sum(pool.starmap(_materialize_mapping_group_to_file,
-                                           zip(mapping_groups, repeat(rml_df), repeat(fnml_df), repeat(config))))
-        else:
-            num_triples = sum(pool.starmap(_materialize_mapping_group_to_kafka,
-                                           zip(mapping_groups, repeat(rml_df), repeat(fnml_df), repeat(config))))
-        pool.close()
-        pool.join()
-    else:
-        for mapping_group in mapping_groups:
-            if not config.get_output_kafka_server():
-                num_triples += _materialize_mapping_group_to_file(mapping_group, rml_df, fnml_df, config)
-            else:
-                num_triples += _materialize_mapping_group_to_kafka(mapping_group, rml_df, fnml_df, config)
-
-    LOGGER.info(f'Number of triples generated in total: {num_triples}.')
-    LOGGER.info(f'Materialization finished in {get_delta_time(start_time)} seconds.')
-
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    main()
+    sys.exit(cli())

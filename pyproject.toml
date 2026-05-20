@@ -48,16 +48,27 @@ dependencies = [
   'elementpath>=4.0.0, <5.0.0',
   'duckdb>=1.0.0, <2.0.0',
   'falcon>=3.0.0, <5.0.0',
-  'connectorx>=0.4.5'
+  'fastapi>=0.51.0, <2.0.0',
+  'connectorx>=0.4.5',
+  'sparqlwrapper',
+  'uvicorn[standard]>=0.12.0',
+  'click'
 ]
-
-[project.scripts]
-morph-kgc = 'morph_kgc.__main__:main'
 
 [tool.hatch.version]
 path = 'src/morph_kgc/_version.py'
 
+[project.scripts]
+morph-kgv = "morph_kgc.__main__:cli"
+
 [project.optional-dependencies]
+cli = [
+    "uvicorn[standard]>=0.12.0",
+    "click",
+]
+web = [
+    "uvicorn[standard]>=0.12.0",
+]
 test = ['pytest>=8.0.0, <9.0.0', 'SQLAlchemy>=2.0.0, <3.0.0', 'sql-metadata>=2.6.0, <3.0.0', 'openpyxl>=3.0.0, <4.0.0', 'odfpy>=1.4.1, <2.0.0', 'pyarrow>=14.0.0, <20.0.0', 'geopandas>=1.0.0, <2.0.0']
 kafka = ['kafka-python>=2.0.2, <3.0.0']
 sqlite = ['SQLAlchemy>=2.0.0, <3.0.0', 'sql-metadata>=2.6.0, <3.0.0']
