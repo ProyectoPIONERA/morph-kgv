@@ -5,8 +5,7 @@ pip install git+https://github.com/ProyectoPIONERA/morph-kgv.git
 ```
 Se recomienda utilizar entornos virtuales.
 
-## Uso por línea de comandoshttps://github.com/ProyectoPIONERA/morph-kgv
-
+## Uso por línea de comandos
 ```
 # Query from a .sparql / .rq file:
 python run_query.py config.ini query.sparql
